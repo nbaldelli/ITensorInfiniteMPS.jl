@@ -1,3 +1,83 @@
+# of Index (Tuple, Vector, ITensor, etc.)
+indtype(i::Index) = typeof(i)
+indtype(T::Type{<:Index}) = T
+indtype(is::Tuple{Vararg{<:Index}}) = eltype(is)
+indtype(is::Vector{<:Index}) = eltype(is)
+indtype(A::ITensor...) = indtype(inds.(A))
+
+indtype(tn1, tn2) = promote_type(indtype(tn1), indtype(tn2))
+indtype(tn) = mapreduce(indtype, promote_type, tn)
+
+#########################################################################
+
+function infsiteinds(s::Vector{<:Index}, translator=translatecelltags)
+  return CelledVector(addtags(s, celltags(1)), translator)
+end
+
+function infsiteinds(
+  site_tag, n::Int; translator=translatecelltags, initstate=nothing, kwargs...
+)
+  s = siteinds(site_tag, n; kwargs...)
+  s = shift_flux_to_zero(s, initstate)
+  return infsiteinds(s, translator)
+end
+
+shift_flux_to_zero(s::Vector{Index{Int}}, initestate::Function) = s
+shift_flux_to_zero(s::Vector{Index{Int}}, flux_density::QN) = s
+
+function shift_flux_to_zero(s::Vector{<:Index}, initstate::Function)
+  fl= flux(MPS(s, initstate))
+  n = length(s)
+  temp = 0
+  for qn in fl.data
+    if !isinteger(qn.val / n)
+      temp = 1
+    end
+  end
+  if temp == 1
+    s = map(sₙ -> multiply_qn(sₙ, n), s)
+  end
+  fl = flux(MPS(s, initstate))
+  println(fl)
+  return shift_flux_to_zero(s, fl)
+end
+
+function shift_flux_to_zero(s::Vector{<:Index}, flux::QN)
+  if iszero(flux)
+    return s
+  end
+  flux_density = flux / length(s)
+  return map(sₙ -> shift_flux(sₙ, flux_density), s)
+end
+
+function multiply_qn(i::Index, n::Int)
+  return ITensors.setspace(i, multiply_qn(space(i), n))
+end
+
+function multiply_qn(space::Vector{Pair{QN,Int}}, n::Int)
+  return map(qnblock -> multiply_qn(qnblock, n), space)
+end
+
+function multiply_qn(qnblock::Pair{QN,Int}, n::Int)
+  return (multiply_qn(ITensors.qn(qnblock),n) => ITensors.blockdim(qnblock))
+end
+
+function multiply_qn(qn::QN, n::Int)
+  return QN(map(qnval -> setval(qnval, qnval.val * n), qn.data))
+end
+
+function shift_flux(i::Index, flux_density::QN)
+  return ITensors.setspace(i, shift_flux(space(i), flux_density))
+end
+
+function shift_flux(space::Vector{Pair{QN,Int}}, flux_density::QN)
+  return map(qnblock -> shift_flux(qnblock, flux_density), space)
+end
+
+function shift_flux(qnblock::Pair{QN,Int}, flux_density::QN)
+  return ((ITensors.qn(qnblock) - flux_density) => ITensors.blockdim(qnblock))
+end
+
 # TODO: Move to ITensors.jl
 function setval(qnval::ITensors.QNVal, val::Int)
   return ITensors.QNVal(ITensors.name(qnval), val, ITensors.modulus(qnval))
@@ -17,53 +97,7 @@ function Base.:/(qn::QN, n::Int)
   return QN(map(qnval -> qnval / n, qn.data))
 end
 
-# of Index (Tuple, Vector, ITensor, etc.)
-indtype(i::Index) = typeof(i)
-indtype(T::Type{<:Index}) = T
-indtype(is::Tuple{Vararg{<:Index}}) = eltype(is)
-indtype(is::Vector{<:Index}) = eltype(is)
-indtype(A::ITensor...) = indtype(inds.(A))
-
-indtype(tn1, tn2) = promote_type(indtype(tn1), indtype(tn2))
-indtype(tn) = mapreduce(indtype, promote_type, tn)
-
-function infsiteinds(s::Vector{<:Index}, translator=translatecelltags)
-  return CelledVector(addtags(s, celltags(1)), translator)
-end
-
-shift_flux_to_zero(s::Vector{Index{Int}}, initestate::Function) = s
-shift_flux_to_zero(s::Vector{Index{Int}}, flux_density::QN) = s
-
-function shift_flux_to_zero(s::Vector{<:Index}, initstate::Function)
-  return shift_flux_to_zero(s, flux(MPS(s, initstate)))
-end
-
-function shift_flux(qnblock::Pair{QN,Int}, flux_density::QN)
-  return ((ITensors.qn(qnblock) - flux_density) => ITensors.blockdim(qnblock))
-end
-function shift_flux(space::Vector{Pair{QN,Int}}, flux_density::QN)
-  return map(qnblock -> shift_flux(qnblock, flux_density), space)
-end
-function shift_flux(i::Index, flux_density::QN)
-  return ITensors.setspace(i, shift_flux(space(i), flux_density))
-end
-
-function shift_flux_to_zero(s::Vector{<:Index}, flux::QN)
-  if iszero(flux)
-    return s
-  end
-  n = length(s)
-  flux_density = flux / n
-  return map(sₙ -> shift_flux(sₙ, flux_density), s)
-end
-
-function infsiteinds(
-  site_tag, n::Int; translator=translatecelltags, initstate=nothing, kwargs...
-)
-  s = siteinds(site_tag, n; kwargs...)
-  s = shift_flux_to_zero(s, initstate)
-  return infsiteinds(s, translator)
-end
+##################################################################
 
 function ITensors.linkinds(ψ::InfiniteMPS)
   N = nsites(ψ)
