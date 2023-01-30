@@ -1,5 +1,7 @@
-using ITensors
+using ITensors, ITensors.HDF5
+using Revise
 using ITensorInfiniteMPS
+using DelimitedFiles
 
 include(
   joinpath(
@@ -37,14 +39,15 @@ end
 #
 function VUMPS(;
     J1 = 1., J2 = 0.4, V = 1., U = 6.,
-    maxdim = 30, # Maximum bond dimension
+    maxdim = 120, # Maximum bond dimension
     cutoff = 1e-7, # Singular value cutoff when increasing the bond dimension
-    max_vumps_iters = 80, # Maximum number of iterations of the VUMPS algorithm at each bond dimension
+    max_vumps_iters = 200, # Maximum number of iterations of the VUMPS algorithm at each bond dimension
     vumps_tol = 1e-5,
     outer_iters = 5, # Number of times to increase the bond dimension
     localham_type = MPO, # or ITensor
     conserve_qns = true,
     eager = true,
+    reupload = false
     )
     ##############################################################################
     # CODE BELOW HERE DOES NOT NEED TO BE MODIFIED
@@ -54,6 +57,7 @@ function VUMPS(;
 
     @show N
     @show localham_type
+
 
     initstate(n) = isodd(n) ? "1" : "0" #half filling
     s = @show infsiteinds("Boson", N; dim = 4, initstate, conserve_qns)
@@ -76,6 +80,13 @@ function VUMPS(;
 
     println("\nRun VUMPS on initial product state, unit cell size $N")
     ψ = vumps_subspace_expansion(H, ψ; outer_iters, subspace_expansion_kwargs, vumps_kwargs)
+
+    h5open("MPS.h5","cw") do f
+        if haskey(f, "psi_U($U)_V($V)_N($N)_J2($J2)_dim($maxdim)_V")
+            delete_object(f, "psi_U($U)_V($V)_N($N)_J2($J2)_dim($maxdim)_V")
+        end
+        write(f,"psi_U($U)_V($V)_N($N)_J2($J2)_dim($maxdim)_V",ψ)
+    end
 
     # Check translational invariance
     println("\nCheck translational invariance of optimized infinite MPS")
@@ -145,15 +156,19 @@ function VUMPS(;
     println("\nCDW order")
     @show dim
     println("\nBOW order")
-    @show bow[0]
-    return dim, real(bow[0])
+    @show bow[1]
+    return energy_infinite, real(dim), real(bow[1])
 end
 
-Vs = [0.85]
+Vs = [0.7, 0.8, 0.85, 0.86, 0.87, 0.88, 0.945, 0.95, 0.955, 0.96, 0.97, 0.98, 0.99, 1.0, 1.1, 1.3]
 dim = zeros(length(Vs))
 bow = zeros(length(Vs))
+J2 = 0.4; V = 1.; U = 6.
 for (i,V) in enumerate(Vs)
-    dim[i], bow[i] = VUMPS(; V=V)
+    E, dim[i], bow[i] = VUMPS(; V = V, U = U, J2 = J2, reupload = false)
+    open("iDMRG_data.txt", "a") do io
+        writedlm(io, real.([U V J2 dim[i] abs(bow[i]) (E[1]+E[2])/2]))
+    end
 end
 
 #why do i have to overload method and add the package name? 
