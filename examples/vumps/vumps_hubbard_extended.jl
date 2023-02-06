@@ -1,4 +1,5 @@
 using ITensors
+using Revise
 using ITensorInfiniteMPS
 
 include(
@@ -26,12 +27,13 @@ model_params = (t=1.0, U=10.0, V=0.0)
 # CODE BELOW HERE DOES NOT NEED TO BE MODIFIED
 #
 
-N = 2 # Unit cell size
+N = 4 # Unit cell size TODO: add a warning for uncommensurate cell sizes?
 
 @show N
 @show localham_type
 
-initstate(n) = isodd(n) ? "↑" : "↓"
+initstate(n) = isodd(n) ? "Up" : "0"
+s = siteinds("Electron", N; conserve_qns)
 s = infsiteinds("Electron", N; initstate, conserve_qns)
 ψ = InfMPS(s, initstate)
 
@@ -89,7 +91,7 @@ energy_infinite = map(b -> expect_two_site(ψ, H[b], b), bs)
 # Compare to DMRG
 #
 
-Nfinite = 100
+Nfinite = 10
 sfinite = siteinds("Electron", Nfinite; conserve_qns)
 Hfinite = MPO(model, sfinite; model_params...)
 ψfinite = randomMPS(sfinite, initstate; linkdims=10)
