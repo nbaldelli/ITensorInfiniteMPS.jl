@@ -27,7 +27,7 @@ model_params = (t=1.0, U=10.0, V=0.0)
 # CODE BELOW HERE DOES NOT NEED TO BE MODIFIED
 #
 
-N = 4 # Unit cell size TODO: add a warning for uncommensurate cell sizes?
+N = 2 # Unit cell size TODO: add a warning for uncommensurate cell sizes?
 
 @show N
 @show localham_type
