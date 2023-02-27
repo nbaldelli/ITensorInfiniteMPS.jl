@@ -1,6 +1,5 @@
 using ITensors
 using ITensorInfiniteMPS
-using ITensorCorrelators
 
 include(
   joinpath(
@@ -9,32 +8,7 @@ include(
 )
 
 ##########################################################
-#Simulation of Ising 2D as a benchmark for the Infinite MPS 
-
-function ITensorInfiniteMPS.unit_cell_terms(::Model"QFM_model"; J1 = 1., J2 = 1., V = 1., U = 1.)
-    #= hamiltonian definition =#
-    ampo = OpSum()  
-    ampo += -J1*(1), "Adag", 1, "A", 2
-    ampo += -J1*(1), "Adag", 2, "A", 1
-  
-    ampo += -J1*(-1)^(1), "Adag", 2, "A", 3
-    ampo += -J1*(-1)^(1), "Adag", 3, "A", 2
-  
-    ampo += V, "N", 1, "N", 2 #dens dens interaction
-    ampo += V, "N", 2, "N", 3 #dens dens interaction
-  
-    ampo += -J2, "Adag", 1, "A", 3
-    ampo += -J2, "Adag", 3, "A", 1
-  
-    ampo += -J2, "Adag", 2, "A", 4
-    ampo += -J2, "Adag", 4, "A", 2
-  
-    ampo += U/2, "N", 1, "N", 1 #on-site interaction
-    ampo += -U/2, "N", 1 
-    ampo += U/2, "N", 2, "N", 2 #on-site interaction
-    ampo += -U/2, "N", 2 
-    return ampo
-end
+#Get a state 
 
 maxdim = 20 # Maximum bond dimension
 cutoff = 1e-6 # Singular value cutoff when increasing the bond dimension
@@ -45,20 +19,17 @@ time_step = -Inf # -Inf corresponds to VUMPS, finite time_step corresponds to TD
 solver_tol = (x -> x / 100) # Tolerance for the local solver (eigsolve in VUMPS and exponentiate in TDVP)
 multisite_update_alg = "parallel" # Choose between ["sequential", "parallel"]. Only parallel works with TDVP.
 conserve_qns = true # Whether or not to conserve spin parity
-nsite = 1 # Number of sites in the unit cell
+nsite = 2 # Number of sites in the unit cell
 localham_type = ITensor # Can choose `ITensor` or `MPO`
 
 # Parameters of the transverse field Ising model
-model_params = (J=1.0, h=0.9)
+#model_params = (J=1.0, h=0.9)
+model_params = (t=1.0, U=10.0, V=0.0)
 
-##############################################################################
-# CODE BELOW HERE DOES NOT NEED TO BE MODIFIED
-#
+model = Model("hubbard")
 
-model = Model("ising")
-
-initstate(n) = "↑"
-s = infsiteinds("S=1/2", nsite; initstate, conserve_szparity=conserve_qns)
+initstate(n) = isodd(n) ? "Up" : "0"
+s = infsiteinds("Electron", nsite; initstate, conserve_qns=conserve_qns)
 ψ = InfMPS(s, initstate)
 
 # Form the Hamiltonian
@@ -77,32 +48,33 @@ subspace_expansion_kwargs = (cutoff=cutoff, maxdim=maxdim)
 
 ψ = vumps_subspace_expansion(H, ψ; outer_iters, subspace_expansion_kwargs, vumps_kwargs)
 
-
 ##########################################################
 #Cut of the Infinite MPS by using deltas and orthogonalize
-#TODO: this does not work as the 
+#TODO: this does not work with Itensors standard correlation_matrix
 
-function toMPS_2(ψ::InfiniteCanonicalMPS, start, stop)
+function toMPS(ψ::InfiniteCanonicalMPS, start, stop)
     N = stop - start + 1
     ψc = (ψ.AL)[start:stop]
-    s_start = inds(ψc[1])[1]
-    s_stop = inds(ψ.C[stop])[2]
+    s = inds(ψc[1])[1]
+    ss = inds(ψ.C[N])[2]
+    s0 = Index(s.space, tags = tags(s), dir = dir(s))
+    s0 = removetags(s0, "Link"); s0 = addtags(s0, "Dummy")
+    
+    sn = Index(ss.space, tags = tags(ss), dir = dir(ss))
+    sn = removetags(sn, "Link"); sn = addtags(sn, "Dummy")
 
-    M = MPS(N)
-    M[1] = dag(ITensor([1. fill(0,dim(s_start)-1)...],s_start)) * ψc[1]
-    for i in 2:(N-1)
-        M[i] = ψc[i]
+    M = MPS(N+2)
+    M[1] = ITensor(LinearAlgebra.diagm(fill(1, dim(s0))), s0, dag(s))
+    for i in 2:(N)
+        M[i] = ψc[i-1]
     end
-    display(ψc[N])
-    display(ψ.C[stop])
-    display(dag(delta(s_stop)))
-
-    M[N] = ψc[N] * ψ.C[stop] * dag( ITensor([1. fill(0,dim(s_stop)-1)...],s_stop))
-    orthogonalize!(M,2)
-    normalize!(M)
+    M[N+1] = ψc[N]*ψ.C[N]
+    M[N+2] = ITensor(LinearAlgebra.diagm(fill(1, dim(ss))), dag(ss), sn)
     return M
 end
 
+##########################################################
+#Correlation matrix for infinite MPS
 
 function correlation_matrix(ψ::InfiniteCanonicalMPS, op1, op2, dim)
     C = zeros(ComplexF64, dim, dim)
@@ -120,51 +92,35 @@ function correlation_matrix(ψ::InfiniteCanonicalMPS, op1, op2, dim)
     return C + C'
 end
 
-function correlation_matrix(ψ::MPS, op1, op2, dim)
-    C = zeros(ComplexF64, dim, dim)
-    for i in 1:dim
+##########################################################
+#Correlation matrix for finite MPS using explicit contraction of operator
+
+function correlation_matrix_gates(ψ::MPS, op1, op2, start, stop)
+    C = zeros(ComplexF64, stop-start+1, stop-start+1)
+    for i in start:stop
         orthogonalize!(ψ, i)
-        for j in (i+1):dim
+        for j in (i+1):stop
             h = op(op1, siteinds(ψ)[i]) * op(op2, siteinds(ψ)[j])
-            ϕ = ψ
+            ϕ = ψ[i]
             for k in (i+1):(j)
                 ϕ *= ψ[k]
             end
-            C[i,j] = (noprime(ϕ * h) * dag(ϕ))[]
+            C[i-start+1,j-start+1] = (noprime(ϕ * h) * dag(ϕ))[]
         end
     end
     return C + C'
 end
 
+start = 1; stop = 5 #where to slice the infiniteMPS
 
-start = 1; stop = 6
-psi = toMPS_2(ψ, start, stop)
+psi = toMPS(ψ, start, stop)
 
-op_inds = []
-for i in start:stop
-    for j in (i+1):stop
-        push!(op_inds, (i,j))
-    end
-end
+A = correlation_matrix_gates(psi, "Sz", "Sz", start+1, stop+1)
+B = correlation_matrix(ψ, "Sz", "Sz", stop-start+1)
 
-A = ITensors.correlation_matrix(psi, "Sx", "Sx") 
-psi2 = toMPS_2(ψ, start, stop+1)
-
-C = ITensors.correlation_matrix(psi2, "Sx", "Sx")
-
-E = correlation_matrix(ψ, "Sx", "Sx", 3)
-F = correlation_matrix(ψ, "Sx", "Sx", 4)
-
-
+println("with infinite = ")
 display(A)
-display(C)
-display(E)
-display(F)
-
-pp = ψ[2:40]
-orthogonalize!(pp,1)
-normalize!(pp)
-norm(pp)
-
-C = ITensorCorrelators.correlator(pp, ("Sx", "Sx"), op_inds)
-C = correlation_matrix(pp, "Sx", "Sx", 3)
+display("with finite = ")
+display(B)
+display("difference = ")
+display(A-B)
