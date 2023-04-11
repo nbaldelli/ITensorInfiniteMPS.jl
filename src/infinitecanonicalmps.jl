@@ -217,3 +217,30 @@ end
 function ITensors.expect(ψ::InfiniteCanonicalMPS, h::InfiniteSum)
   return [expect(ψ, h[j]) for j in 1:nsites(ψ)]
 end
+
+function correlation_function(ψ::InfiniteCanonicalMPS, o1, o2, n1, n2)
+  initstate(n) = isodd(n) ? "1" : "0" #half filling
+  s = @show infsiteinds("Boson", 2; dim=3, initstate, conserve_qns=true)
+  ψ = InfMPS(s, initstate)
+
+  T = TransferMatrix(ψ.AL)
+  Tᵀ = transpose(T)
+  vr = randomITensor(dag(input_inds(T)))
+  vl = randomITensor(dag(input_inds(Tᵀ)))
+
+  neigs = 10
+  tol = 1e-10
+  values_r, vec_r, right_info = eigsolve(T, vr, neigs, :LM; tol=tol)
+  values_l, vec_l, left_info = eigsolve(Tᵀ, vl, neigs, :LM; tol=tol)
+
+  left_env = ITensor()
+
+  println("\n##########################################")
+  println("Check transfer matrix left and right fixed points")
+  @show norm(T(vec_r[1]) - values_r[1] * vec_r[1])
+  @show norm(Tᵀ(vec_l[1]) - values_l[1] * vec_l[1])
+
+  @show values_l
+  @show values_r
+  @show flux.(vec_r)
+end
